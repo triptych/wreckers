@@ -331,7 +331,9 @@ function step(dt){
 
     if(m.safeT > 0) m.safeT -= dt;
     let taken = false;
-    if(m.lit < 0.3 && m.safeT <= 0){
+    // a mermaid can only be snatched where the light could actually have reached her —
+    // otherwise the player never had a chance to save her.
+    if(m.lit < 0.3 && m.safeT <= 0 && sdist(LX,LY,m.x,m.y) < BEAM_LEN){
       for(const sh of G.sharks){
         if(sdist(m.x,m.y,sh.x,sh.y) < 9){ taken = true; break; }
       }
@@ -396,7 +398,9 @@ function step(dt){
     sh.x += Math.cos(sh.a)*spd*dt / PA;
     sh.y += Math.sin(sh.a)*spd*dt;
 
-    if(prey && sdist(sh.x,sh.y,prey.x,prey.y) < 6){
+    // a shark can only make its kill within the lamp's reach — outside BEAM_LEN
+    // the player never had a shot at driving it off, so let it keep closing instead.
+    if(prey && sdist(sh.x,sh.y,prey.x,prey.y) < 6 && sdist(LX,LY,prey.x,prey.y) < BEAM_LEN){
       const isMermaid = G.mermaids.includes(prey);
       if(isMermaid){
         G.mermaids.splice(G.mermaids.indexOf(prey),1);
