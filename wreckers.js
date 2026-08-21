@@ -129,6 +129,7 @@ const sfx = {
   wave(){ [523,659,784].forEach((f,i)=>tone(f,.10,'square',.12,i*.09)); },
   over(){ [392,330,262,196].forEach((f,i)=>tone(f,.24,'square',.14,i*.16)); },
   sharkAway(){ tone(180,.08,'sawtooth',.13); tone(120,.14,'sawtooth',.11,.07); },
+  sharkNear(){ tone(140,.05,'triangle',.10); },
   bite(){ noise(.22,.28); tone(90,.22,'sawtooth',.15); },
   mermaid(){ [784,988,1175,1568].forEach((f,i)=>tone(f,.16,'triangle',.13,i*.07)); }
 };
@@ -138,14 +139,14 @@ const G = {
   mode:'title', t:0, beam:-Math.PI/2, ships:[], spawnT:1.2,
   score:0, best:0, lanterns:3, wave:1, cleared:0, streak:0,
   flash:0, shake:0, msg:'', msgT:0, lock:0, lureT:0, drift:0,
-  sharks:[], sharkT:2.4, mermaids:[], mermaidT:6
+  sharks:[], sharkT:2.4, mermaids:[], mermaidT:6, sharkWarnT:0
 };
 
 function reset(){
   G.mode='play'; G.ships.length=0; G.score=0; G.lanterns=3; G.wave=1;
   G.cleared=0; G.streak=0; G.spawnT=1.4; G.beam=-Math.PI/2;
   G.flash=0; G.shake=0; G.msg='WAVE 1'; G.msgT=1.4;
-  G.sharks.length=0; G.sharkT=2.4; G.mermaids.length=0; G.mermaidT=6;
+  G.sharks.length=0; G.sharkT=2.4; G.mermaids.length=0; G.mermaidT=6; G.sharkWarnT=0;
 }
 
 /* sharks show up once the waters get busy; mermaids once the player has proven they can juggle them */
@@ -209,8 +210,9 @@ function litBy(s){
   return Math.abs(angDiff(sang(LX,LY,s.x,s.y), G.beam)) < BEAM_HALF;
 }
 
-function loseLantern(){
-  G.lanterns--; G.streak = 0; G.flash = .32; G.shake = .5; sfx.crash();
+function loseLantern(msg){
+  G.lanterns--; G.streak = 0; G.flash = .32; G.shake = .5;
+  if(msg){ G.msg = msg; G.msgT = 1.3; } else sfx.crash();
   if(G.lanterns <= 0){
     G.mode='over'; G.lock = .9; G.best = Math.max(G.best, G.score); sfx.over();
   }
@@ -253,6 +255,15 @@ function step(dt){
   }
 
   let luring = false;
+
+  // clear last frame's "being stalked" marks; the shark pass below re-marks live targets
+  for(const s of G.ships) s.stalkD = Infinity;
+  for(const m of G.mermaids) m.stalkD = Infinity;
+  for(const sh of G.sharks){
+    if(sh.scared > 0 || sh.preyId == null) continue;
+    const prey = G.mermaids.find(m=>m.id===sh.preyId) || G.ships.find(s2=>s2.id===sh.preyId);
+    if(prey) prey.stalkD = Math.min(prey.stalkD ?? Infinity, sdist(sh.x,sh.y,prey.x,prey.y));
+  }
 
   for(let i=G.ships.length-1;i>=0;i--){
     const s = G.ships[i];
@@ -395,7 +406,7 @@ function step(dt){
       }
       G.sharks.splice(i,1);
       if(isMermaid){ G.streak = 0; G.flash = .26; sfx.bite(); }
-      else if(prey.type===0){ sfx.bite(); loseLantern(); }
+      else if(prey.type===0){ sfx.bite(); loseLantern('SHARK TOOK A SHIP'); }
       else { G.score += 30; sfx.bite(); }
       continue;
     }
@@ -406,6 +417,16 @@ function step(dt){
     G.lureT -= dt;
     if(G.lureT <= 0){ sfx.lure(); G.lureT = .19; }
   } else G.lureT = 0;
+
+  // a shark closing on a trader or mermaid gets a ticking warning — the target
+  // it's chasing is worth protecting, unlike a raider left to the sharks.
+  let closest = Infinity;
+  for(const s of G.ships) if(s.type===0 && s.stalkD < closest) closest = s.stalkD;
+  for(const m of G.mermaids) if(m.stalkD < closest) closest = m.stalkD;
+  if(closest < 40){
+    G.sharkWarnT -= dt;
+    if(G.sharkWarnT <= 0){ sfx.sharkNear(); G.sharkWarnT = Math.max(.14, closest/40 * .5); }
+  } else G.sharkWarnT = 0;
 }
 
 /* ---------- drawing ---------- */
@@ -457,6 +478,19 @@ function drawShip(s){
     ctx.fillStyle = C.lamp;
     ctx.fillRect(px-3, py-2, 1, 1); ctx.fillRect(px+2, py-2, 1, 1);
   }
+  drawStalkMark(s, px, py);
+}
+
+// a shark closing in shows as a small fin over its target — blink rate
+// quickens as the shark gets nearer, so the threat reads before the bite.
+function drawStalkMark(entity, px, py){
+  const d = entity.stalkD;
+  if(!(d < 40)) return;
+  const rate = 4 + (1 - d/40)*10;
+  if((G.t*rate|0)%2){
+    ctx.fillStyle = C.fin;
+    ctx.fillRect(px-1, py-6, 3, 1); ctx.fillRect(px, py-7, 1, 1);
+  }
 }
 
 function drawShark(sh){
@@ -493,6 +527,7 @@ function drawMermaid(m){
     ctx.fillStyle = C.lamp;
     ctx.fillRect(px-2, py-3, 1, 1); ctx.fillRect(px+2, py-3, 1, 1);
   }
+  drawStalkMark(m, px, py);
 }
 
 function drawIsland(){
