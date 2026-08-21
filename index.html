@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover,user-scalable=no">
+<meta name="theme-color" content="#07111f">
+<title>WRECKERS! — keep the light</title>
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<div id="cab">
+  <div id="housing">
+    <div id="screen">
+      <canvas id="c" width="160" height="192" aria-label="Wreckers, a lighthouse game"></canvas>
+      <div id="scan"></div>
+    </div>
+  </div>
+  <div id="pad">
+    <button class="key" id="kl" aria-label="Turn the light left">◀</button>
+    <button class="key mid" id="kf">START</button>
+    <button class="key" id="kr" aria-label="Turn the light right">▶</button>
+  </div>
+  <p id="label">
+    <b>WRECKERS!</b> — you keep the last light on the shoal.<br>
+    Hold ◀ ▶ to turn the beam. Let go and it stops.<br>
+    <hr>
+    Hold the light on a <b>white trader</b> until it sees you — it turns for open water.<br>
+    <i>Red raiders</i> steer <i>toward</i> the light. Leave them in the dark and they lose the shoal.<br>
+    Anything that reaches the rocks costs you a lantern.
+  </p>
+</div>
+
+<script src="wreckers.js"></script>
+</body>
+</html>
