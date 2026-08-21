@@ -340,9 +340,9 @@ function render(){
     ctx.translate(Math.round((Math.random()-.5)*3), Math.round((Math.random()-.5)*3));
   }
   drawSea();
+  drawIsland();
   drawBeam();
   for(const s of G.ships) drawShip(s);
-  drawIsland();
 
   if(G.mode === 'play'){
     drawHUD();
