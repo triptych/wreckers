@@ -21,7 +21,8 @@ const C = {
   safe:'#54c05a', raider:'#d84c2c', raiderLo:'#8c2414',
   shark:'#5c6b74', sharkLo:'#38424a', fin:'#1f262b',
   mermaid:'#e89cc4', mermaidLit:'#ffe1f0', tail:'#4cc0b8',
-  hud:'#fcd84c', dark:'#000000', white:'#ffffff'
+  hud:'#fcd84c', dark:'#000000', white:'#ffffff',
+  supply:'#8cf0ff', supplyLo:'#3c9cb0', lightWave:'#eaffff'
 };
 
 /* ---------- 3x5 pixel font (drawn, not typeset) ---------- */
@@ -131,22 +132,31 @@ const sfx = {
   sharkAway(){ tone(180,.08,'sawtooth',.13); tone(120,.14,'sawtooth',.11,.07); },
   sharkNear(){ tone(140,.05,'triangle',.10); },
   bite(){ noise(.22,.28); tone(90,.22,'sawtooth',.15); },
-  mermaid(){ [784,988,1175,1568].forEach((f,i)=>tone(f,.16,'triangle',.13,i*.07)); }
+  mermaid(){ [784,988,1175,1568].forEach((f,i)=>tone(f,.16,'triangle',.13,i*.07)); },
+  supply(){ tone(880,.05,'square',.11); tone(1320,.06,'square',.10,.05); },
+  supplyFull(){ [660,880,1100,1320].forEach((f,i)=>tone(f,.09,'square',.13,i*.05)); },
+  lightWave(){ noise(.5,.22); [220,440,660,880,1320].forEach((f,i)=>tone(f,.4,'sine',.12,i*.03)); },
+  lifeUp(){ [523,659,784,1046].forEach((f,i)=>tone(f,.12,'triangle',.12,i*.06)); }
 };
 
 /* ---------- state ---------- */
+const MAX_LANTERNS = 3;
+const SUPPLY_NEEDED = 4;
+
 const G = {
   mode:'title', t:0, beam:-Math.PI/2, ships:[], spawnT:1.2,
   score:0, best:0, lanterns:3, wave:1, cleared:0, streak:0,
   flash:0, shake:0, msg:'', msgT:0, lock:0, lureT:0, drift:0,
-  sharks:[], sharkT:2.4, mermaids:[], mermaidT:6, sharkWarnT:0
+  sharks:[], sharkT:2.4, mermaids:[], mermaidT:6, sharkWarnT:0,
+  supply:0, supplies:[], lightWaveT:0, lightWaveR:0
 };
 
 function reset(){
-  G.mode='play'; G.ships.length=0; G.score=0; G.lanterns=3; G.wave=1;
+  G.mode='play'; G.ships.length=0; G.score=0; G.lanterns=MAX_LANTERNS; G.wave=1;
   G.cleared=0; G.streak=0; G.spawnT=1.4; G.beam=-Math.PI/2;
   G.flash=0; G.shake=0; G.msg='WAVE 1'; G.msgT=1.4;
   G.sharks.length=0; G.sharkT=2.4; G.mermaids.length=0; G.mermaidT=6; G.sharkWarnT=0;
+  G.supply=0; G.supplies.length=0; G.lightWaveT=0; G.lightWaveR=0;
 }
 
 /* sharks show up once the waters get busy; mermaids once the player has proven they can juggle them */
@@ -204,6 +214,13 @@ function spawnMermaid(){
   });
 }
 
+// a supply point drifts free until caught in the beam, then it's drawn in
+// like a tractor beam and fills one slot of the Light Wave.
+function spawnSupply(x, y){
+  if(G.supply >= SUPPLY_NEEDED) return;
+  G.supplies.push({ x, y, a: Math.random()*Math.PI*2, drift: 4 + Math.random()*3 });
+}
+
 function litBy(s){
   const d = sdist(LX,LY,s.x,s.y);
   if(d > BEAM_LEN || d < 6) return false;
@@ -222,10 +239,36 @@ function cleared(){
   G.cleared++;
   if(G.cleared >= 8){
     G.cleared = 0; G.wave++;
+    const healed = G.lanterns < MAX_LANTERNS;
+    if(healed) G.lanterns++;
     if(G.wave === SHARK_WAVE)        { G.msg = 'SHARKS! USE THE LIGHT'; G.msgT = 2.4; }
     else if(G.wave === MERMAID_WAVE) { G.msg = 'GUIDE THE MERMAIDS IN'; G.msgT = 2.4; }
     else                              { G.msg = 'WAVE ' + G.wave; G.msgT = 1.4; }
     sfx.wave();
+    if(healed) tone(1046, .18, 'triangle', .12, .18);
+  }
+}
+
+// the Light Wave: a pulse from the lamp that shoves every ship off, scares
+// every shark, and reels in every mermaid at once. Costs a full supply meter.
+function triggerLightWave(){
+  if(G.mode !== 'play' || G.supply < SUPPLY_NEEDED || G.lightWaveT > 0) return;
+  G.supply = 0;
+  G.lightWaveT = 0.6; G.lightWaveR = 0;
+  G.shake = .45; sfx.lightWave();
+
+  for(const s of G.ships){
+    if(s.state !== 'in') continue;
+    const away = sang(CX, CY, s.x, s.y);
+    s.state = 'out'; s.a = away; s.ft = .5; s.lit = 0;
+    if(s.type === 0){ G.streak++; G.score += 100 + Math.min(150, (G.streak-1)*25); }
+    else{ G.score += 50; }
+    cleared();
+  }
+  for(const sh of G.sharks){ sh.scared = 2.2; sh.preyId = null; }
+  for(let i=G.mermaids.length-1;i>=0;i--){
+    G.mermaids.splice(i,1);
+    G.score += 400 + G.wave*25; cleared();
   }
 }
 
@@ -235,6 +278,7 @@ function step(dt){
   if(G.shake>0) G.shake -= dt;
   if(G.msgT>0) G.msgT -= dt;
   if(G.lock>0)  G.lock  -= dt;
+  if(G.lightWaveT>0){ G.lightWaveT -= dt; G.lightWaveR += dt * 260; }
 
   const dir = input();
   if(G.mode==='play') G.beam += dir * TURN_RATE * dt;
@@ -282,6 +326,8 @@ function step(dt){
           s.state='out'; s.a = toRock + Math.PI + (Math.random()-.5)*0.7; s.ft = .5;
           G.streak++; G.score += 100 + Math.min(150, (G.streak-1)*25);
           sfx.save(); cleared();
+          // a grateful trader sometimes tosses back a supply as it sails off
+          if(Math.random() < 0.35) spawnSupply(s.x, s.y);
         }
       }else{
         // raider: the light is what it steers by
@@ -309,6 +355,31 @@ function step(dt){
     s.x += Math.cos(s.a)*spd*dt / PA;
     s.y += Math.sin(s.a)*spd*dt;
     if(s.x < -14 || s.x > W+14 || s.y < -14 || s.y > H+14) G.ships.splice(i,1);
+  }
+
+  // supply points: bob in place until the beam catches them, then the light
+  // pulls them in like a tractor beam — reach the lamp and they power up the Light Wave.
+  for(let i=G.supplies.length-1;i>=0;i--){
+    const sp = G.supplies[i];
+    const lit = litBy(sp);
+    if(lit){
+      const toLamp = sang(sp.x, sp.y, LX, LY);
+      sp.a = turnToward(sp.a, toLamp, dt*4);
+      const d = sdist(sp.x,sp.y,LX,LY);
+      const pull = 26 + (1 - Math.min(1,d/BEAM_LEN))*40;
+      sp.x += Math.cos(sp.a)*pull*dt / PA;
+      sp.y += Math.sin(sp.a)*pull*dt;
+      if(d < 8){
+        G.supplies.splice(i,1); G.supply = Math.min(SUPPLY_NEEDED, G.supply+1);
+        if(G.supply >= SUPPLY_NEEDED) sfx.supplyFull(); else sfx.supply();
+        continue;
+      }
+    }else{
+      sp.a += Math.sin(G.t*1.3 + sp.drift)*dt*0.8;
+      sp.x += Math.cos(sp.a)*3*dt / PA;
+      sp.y += Math.sin(sp.a)*3*dt;
+    }
+    if(sp.x < -14 || sp.x > W+14 || sp.y < -14 || sp.y > H+14) G.supplies.splice(i,1);
   }
 
   // mermaids: drawn in only while lit, otherwise they stall and drift; snatched if left
@@ -411,7 +482,7 @@ function step(dt){
       G.sharks.splice(i,1);
       if(isMermaid){ G.streak = 0; G.flash = .26; sfx.bite(); }
       else if(prey.type===0){ sfx.bite(); loseLantern('SHARK TOOK A SHIP'); }
-      else { G.score += 30; sfx.bite(); }
+      else { G.score += 30; sfx.bite(); spawnSupply(prey.x, prey.y); }
       continue;
     }
     if(sh.x < -16 || sh.x > W+16 || sh.y < -16 || sh.y > H+16) G.sharks.splice(i,1);
@@ -516,6 +587,15 @@ function drawShark(sh){
   }
 }
 
+function drawSupply(sp){
+  const px = Math.round(sp.x), py = Math.round(sp.y);
+  const pulse = (G.t*6|0)%2;
+  ctx.fillStyle = pulse ? C.supply : C.supplyLo;
+  ctx.fillRect(px-1, py-1, 3, 3);
+  ctx.fillStyle = C.supply;
+  ctx.fillRect(px, py, 1, 1);
+}
+
 function drawMermaid(m){
   const px = Math.round(m.x), py = Math.round(m.y);
   const lit = m.lit > 0.2;
@@ -563,6 +643,30 @@ function drawHUD(){
     ctx.fillStyle = C.lamp;   ctx.fillRect(x, 6, 3, 3);
   }
   drawText('WAVE '+G.wave, 4, 17, '#7f95a5', 1);
+
+  // supply meter: 4 slots, bottom-right, fill up toward a Light Wave
+  const full = G.supply >= SUPPLY_NEEDED;
+  for(let i=0;i<SUPPLY_NEEDED;i++){
+    const x = W-6-i*7, y = H-9;
+    ctx.fillStyle = C.supplyLo; ctx.fillRect(x, y, 4, 4);
+    if(i < G.supply){
+      ctx.fillStyle = (full && (G.t*6|0)%2) ? C.lightWave : C.supply;
+      ctx.fillRect(x+1, y+1, 2, 2);
+    }
+  }
+}
+
+// the Light Wave itself: an expanding, fading ring from the lamp.
+function drawLightWaveRing(){
+  if(G.lightWaveT <= 0) return;
+  const r = G.lightWaveR, a = Math.max(0, G.lightWaveT/0.6);
+  ctx.strokeStyle = C.lightWave;
+  ctx.globalAlpha = a;
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.ellipse(LX, LY, r/PA, r, 0, 0, Math.PI*2);
+  ctx.stroke();
+  ctx.globalAlpha = 1;
 }
 
 function render(){
@@ -575,7 +679,9 @@ function render(){
   drawBeam();
   for(const sh of G.sharks) drawShark(sh);
   for(const s of G.ships) drawShip(s);
+  for(const sp of G.supplies) drawSupply(sp);
   for(const m of G.mermaids) drawMermaid(m);
+  drawLightWaveRing();
 
   if(G.mode === 'play'){
     drawHUD();
@@ -621,6 +727,7 @@ function fire(){
   audio();
   if(G.mode === 'title'){ reset(); }
   else if(G.mode === 'over' && G.lock <= 0){ reset(); }
+  else if(G.mode === 'play'){ triggerLightWave(); }
 }
 
 const kl = document.getElementById('kl'), kr = document.getElementById('kr'), kf = document.getElementById('kf');
@@ -677,6 +784,14 @@ function frame(now){
     glowT = 0;
     const lit = G.mode==='play' ? 26 + G.streak*2 : 20;
     housing.style.setProperty('--glow', (G.flash>0 ? 70 : lit) + 'px');
+    if(G.mode === 'play'){
+      const ready = G.supply >= SUPPLY_NEEDED;
+      kf.textContent = ready ? 'WAVE!' : 'LIGHT';
+      kf.classList.toggle('ready', ready);
+    }else{
+      kf.textContent = 'START';
+      kf.classList.remove('ready');
+    }
   }
   requestAnimationFrame(frame);
 }
