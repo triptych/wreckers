@@ -19,6 +19,8 @@ const C = {
   tower:'#dcdcdc', towerRed:'#c8442c', lamp:'#fcfc54',
   beam:'#fcd84c', hull:'#8a9bab', sail:'#5c7d99', sail2:'#9cdcfc', salt:'#cfd8dd',
   safe:'#54c05a', raider:'#d84c2c', raiderLo:'#8c2414',
+  shark:'#5c6b74', sharkLo:'#38424a', fin:'#1f262b',
+  mermaid:'#e89cc4', mermaidLit:'#ffe1f0', tail:'#4cc0b8',
   hud:'#fcd84c', dark:'#000000', white:'#ffffff'
 };
 
@@ -125,21 +127,32 @@ const sfx = {
   lure(){ tone(96,.09,'sawtooth',.10); },
   crash(){ noise(.45,.3); tone(70,.5,'sawtooth',.16); },
   wave(){ [523,659,784].forEach((f,i)=>tone(f,.10,'square',.12,i*.09)); },
-  over(){ [392,330,262,196].forEach((f,i)=>tone(f,.24,'square',.14,i*.16)); }
+  over(){ [392,330,262,196].forEach((f,i)=>tone(f,.24,'square',.14,i*.16)); },
+  sharkAway(){ tone(180,.08,'sawtooth',.13); tone(120,.14,'sawtooth',.11,.07); },
+  bite(){ noise(.22,.28); tone(90,.22,'sawtooth',.15); },
+  mermaid(){ [784,988,1175,1568].forEach((f,i)=>tone(f,.16,'triangle',.13,i*.07)); }
 };
 
 /* ---------- state ---------- */
 const G = {
   mode:'title', t:0, beam:-Math.PI/2, ships:[], spawnT:1.2,
   score:0, best:0, lanterns:3, wave:1, cleared:0, streak:0,
-  flash:0, shake:0, msg:'', msgT:0, lock:0, lureT:0, drift:0
+  flash:0, shake:0, msg:'', msgT:0, lock:0, lureT:0, drift:0,
+  sharks:[], sharkT:2.4, mermaids:[], mermaidT:6
 };
 
 function reset(){
   G.mode='play'; G.ships.length=0; G.score=0; G.lanterns=3; G.wave=1;
   G.cleared=0; G.streak=0; G.spawnT=1.4; G.beam=-Math.PI/2;
   G.flash=0; G.shake=0; G.msg='WAVE 1'; G.msgT=1.4;
+  G.sharks.length=0; G.sharkT=2.4; G.mermaids.length=0; G.mermaidT=6;
 }
+
+/* sharks show up once the waters get busy; mermaids once the player has proven they can juggle them */
+const SHARK_WAVE   = 3;
+const MERMAID_WAVE = 4;
+const sharkSpeed = () => 15 + (G.wave-SHARK_WAVE)*1.2;
+const mermaidSpeed = () => 7 + (G.wave-MERMAID_WAVE)*0.6;
 
 const waveSpeed  = () => 11 + (G.wave-1)*1.5;
 const waveGap    = () => Math.max(1.05, 3.1 - (G.wave-1)*0.19);
@@ -155,10 +168,38 @@ function spawn(){
   else { x = W+8; y = 20 + Math.random()*(H-30); }
   const raider = Math.random() < raiderOdds();
   G.ships.push({
-    x, y, a: sang(x,y,CX,CY) + (Math.random()-.5)*0.5,
+    id: ++idSeq, x, y, a: sang(x,y,CX,CY) + (Math.random()-.5)*0.5,
     type: raider ? 1 : 0, lit: 0, patience: 7.2, wob: Math.random()*6,
     state:'in', spd: waveSpeed() * (raider ? 0.95 : 1) * (0.9+Math.random()*0.25),
     ft: 0
+  });
+}
+let idSeq = 0;
+
+function spawnShark(){
+  if(G.sharks.length >= 3) return;
+  const edge = (Math.random()*4)|0;
+  let x,y;
+  if(edge===0){ x = Math.random()*W; y = -10; }
+  else if(edge===1){ x = Math.random()*W; y = H+10; }
+  else if(edge===2){ x = -10; y = 20 + Math.random()*(H-30); }
+  else { x = W+10; y = 20 + Math.random()*(H-30); }
+  G.sharks.push({
+    x, y, a: sang(x,y,CX,CY), lit:0, spd: sharkSpeed(), preyId:null, scared:0
+  });
+}
+
+function spawnMermaid(){
+  if(G.mermaids.length >= 1) return;
+  const edge = (Math.random()*4)|0;
+  let x,y;
+  if(edge===0){ x = Math.random()*W; y = -8; }
+  else if(edge===1){ x = Math.random()*W; y = H+8; }
+  else if(edge===2){ x = -8; y = 20 + Math.random()*(H-30); }
+  else { x = W+8; y = 20 + Math.random()*(H-30); }
+  G.mermaids.push({
+    id: ++idSeq, x, y, a: sang(x,y,CX,CY), lit:0, spd: mermaidSpeed(),
+    wob: Math.random()*6, safeT:0
   });
 }
 
@@ -178,7 +219,11 @@ function loseLantern(){
 function cleared(){
   G.cleared++;
   if(G.cleared >= 8){
-    G.cleared = 0; G.wave++; G.msg = 'WAVE ' + G.wave; G.msgT = 1.4; sfx.wave();
+    G.cleared = 0; G.wave++;
+    if(G.wave === SHARK_WAVE)        { G.msg = 'SHARKS! USE THE LIGHT'; G.msgT = 2.4; }
+    else if(G.wave === MERMAID_WAVE) { G.msg = 'GUIDE THE MERMAIDS IN'; G.msgT = 2.4; }
+    else                              { G.msg = 'WAVE ' + G.wave; G.msgT = 1.4; }
+    sfx.wave();
   }
 }
 
@@ -197,6 +242,15 @@ function step(dt){
 
   G.spawnT -= dt;
   if(G.spawnT <= 0){ spawn(); G.spawnT = waveGap() * (0.8 + Math.random()*0.5); }
+
+  if(G.wave >= SHARK_WAVE){
+    G.sharkT -= dt;
+    if(G.sharkT <= 0){ spawnShark(); G.sharkT = Math.max(2.6, 6.5 - (G.wave-SHARK_WAVE)*0.4) * (0.8+Math.random()*0.4); }
+  }
+  if(G.wave >= MERMAID_WAVE){
+    G.mermaidT -= dt;
+    if(G.mermaidT <= 0){ spawnMermaid(); G.mermaidT = Math.max(9, 18 - (G.wave-MERMAID_WAVE)*1.2) * (0.8+Math.random()*0.4); }
+  }
 
   let luring = false;
 
@@ -244,6 +298,108 @@ function step(dt){
     s.x += Math.cos(s.a)*spd*dt / PA;
     s.y += Math.sin(s.a)*spd*dt;
     if(s.x < -14 || s.x > W+14 || s.y < -14 || s.y > H+14) G.ships.splice(i,1);
+  }
+
+  // mermaids: drawn in only while lit, otherwise they stall and drift; snatched if left
+  // undefended near a shark or a raider.
+  for(let i=G.mermaids.length-1;i>=0;i--){
+    const m = G.mermaids[i];
+    const lit = litBy(m);
+    m.lit = lit ? Math.min(1, m.lit + dt*1.6) : Math.max(0, m.lit - dt*1.1);
+    const toRock = sang(m.x, m.y, CX, CY);
+    m.a = turnToward(m.a, toRock, dt*0.7);
+
+    let spd;
+    if(m.lit > 0.15){
+      spd = m.spd * (0.6 + m.lit*0.9);
+    }else{
+      m.wob += dt;
+      m.a += Math.sin(m.wob*1.7)*dt*1.2;
+      spd = m.spd * 0.15;
+    }
+
+    if(m.safeT > 0) m.safeT -= dt;
+    let taken = false;
+    if(m.lit < 0.3 && m.safeT <= 0){
+      for(const sh of G.sharks){
+        if(sdist(m.x,m.y,sh.x,sh.y) < 9){ taken = true; break; }
+      }
+      if(!taken) for(const s2 of G.ships){
+        if(s2.type===1 && s2.state==='in' && sdist(m.x,m.y,s2.x,s2.y) < 8){ taken = true; break; }
+      }
+    }
+    if(taken){
+      G.mermaids.splice(i,1); G.streak = 0; G.flash = .22; sfx.bite(); continue;
+    }
+
+    if(sdist(m.x,m.y,CX,CY) < CRASH_R){
+      G.mermaids.splice(i,1);
+      G.score += 400 + G.wave*25; sfx.mermaid(); cleared();
+      continue;
+    }
+
+    m.x += Math.cos(m.a)*spd*dt / PA;
+    m.y += Math.sin(m.a)*spd*dt;
+    if(m.x < -14 || m.x > W+14 || m.y < -14 || m.y > H+14) G.mermaids.splice(i,1);
+  }
+
+  // sharks: hunt the nearest ship or mermaid, break off and flee when caught in the light.
+  for(let i=G.sharks.length-1;i>=0;i--){
+    const sh = G.sharks[i];
+    const lit = litBy(sh);
+    sh.lit = lit ? Math.min(1, sh.lit + dt*2.4) : Math.max(0, sh.lit - dt*1.2);
+
+    if(sh.lit >= 0.6 && sh.scared <= 0){
+      sh.scared = 1.6; sh.preyId = null; sfx.sharkAway();
+    }
+
+    if(sh.scared > 0){
+      sh.scared -= dt;
+      const away = sang(CX,CY,sh.x,sh.y);
+      sh.a = turnToward(sh.a, away, dt*3);
+      const spd = sh.spd * 1.6;
+      sh.x += Math.cos(sh.a)*spd*dt / PA;
+      sh.y += Math.sin(sh.a)*spd*dt;
+      if(sh.x < -16 || sh.x > W+16 || sh.y < -16 || sh.y > H+16) G.sharks.splice(i,1);
+      continue;
+    }
+
+    // pick (or keep) a target: the nearest mermaid, else the nearest inbound ship
+    let prey = null;
+    if(sh.preyId != null){
+      prey = G.mermaids.find(m=>m.id===sh.preyId) || G.ships.find(s2=>s2.id===sh.preyId && s2.state==='in');
+    }
+    if(!prey){
+      let best = null, bestD = Infinity;
+      for(const m of G.mermaids){ const d = sdist(sh.x,sh.y,m.x,m.y); if(d<bestD){bestD=d; best=m;} }
+      for(const s2 of G.ships){ if(s2.state!=='in') continue; const d = sdist(sh.x,sh.y,s2.x,s2.y); if(d<bestD){bestD=d; best=s2;} }
+      prey = best; if(prey) sh.preyId = prey.id;
+    }
+
+    if(prey){
+      sh.a = turnToward(sh.a, sang(sh.x,sh.y,prey.x,prey.y), dt*2.4);
+    }else{
+      sh.a = turnToward(sh.a, sang(sh.x,sh.y,CX,CY), dt*1);
+    }
+    const spd = sh.spd;
+    sh.x += Math.cos(sh.a)*spd*dt / PA;
+    sh.y += Math.sin(sh.a)*spd*dt;
+
+    if(prey && sdist(sh.x,sh.y,prey.x,prey.y) < 6){
+      const isMermaid = G.mermaids.includes(prey);
+      if(isMermaid){
+        G.mermaids.splice(G.mermaids.indexOf(prey),1);
+      }else{
+        const idx = G.ships.indexOf(prey);
+        if(idx>=0) G.ships.splice(idx,1);
+      }
+      G.sharks.splice(i,1);
+      if(isMermaid){ G.streak = 0; G.flash = .26; sfx.bite(); }
+      else if(prey.type===0){ sfx.bite(); loseLantern(); }
+      else { G.score += 30; sfx.bite(); }
+      continue;
+    }
+    if(sh.x < -16 || sh.x > W+16 || sh.y < -16 || sh.y > H+16) G.sharks.splice(i,1);
   }
 
   if(luring){
@@ -303,6 +459,42 @@ function drawShip(s){
   }
 }
 
+function drawShark(sh){
+  const px = Math.round(sh.x), py = Math.round(sh.y);
+  const facingR = Math.cos(sh.a) > 0;
+  const lit = sh.lit > 0.25;
+  ctx.fillStyle = C.wave;
+  ctx.fillRect(px - Math.round(Math.cos(sh.a)*3), py - Math.round(Math.sin(sh.a)*3), 1, 1);
+  ctx.fillStyle = lit ? '#8a99a2' : C.shark;
+  ctx.fillRect(px-3, py, 6, 1);                          // body
+  ctx.fillStyle = C.sharkLo;
+  ctx.fillRect(px-3, py+1, 6, 1);                        // belly shadow
+  ctx.fillStyle = C.fin;
+  ctx.fillRect(px, py-2, 1, 2);                          // dorsal fin
+  ctx.fillStyle = lit ? '#8a99a2' : C.shark;
+  ctx.fillRect(px + (facingR? 3:-4), py, 1, 1);          // nose
+  if(sh.scared > 0 && (G.t*16|0)%2){
+    ctx.fillStyle = C.white; ctx.fillRect(px-1, py-4, 1,1); ctx.fillRect(px+1, py-4, 1,1);
+  }
+}
+
+function drawMermaid(m){
+  const px = Math.round(m.x), py = Math.round(m.y);
+  const lit = m.lit > 0.2;
+  ctx.fillStyle = C.wave;
+  ctx.fillRect(px - Math.round(Math.cos(m.a)*2), py - Math.round(Math.sin(m.a)*2), 1, 1);
+  ctx.fillStyle = C.tail;
+  ctx.fillRect(px + (Math.cos(m.a)>0?-3:2), py, 2, 1);   // tail fin
+  ctx.fillStyle = lit ? C.mermaidLit : C.mermaid;
+  ctx.fillRect(px-1, py-1, 3, 2);                        // body
+  ctx.fillStyle = lit ? C.mermaidLit : C.mermaid;
+  ctx.fillRect(px + (Math.cos(m.a)>0?1:-1), py-2, 1, 1); // head
+  if(lit){
+    ctx.fillStyle = C.lamp;
+    ctx.fillRect(px-2, py-3, 1, 1); ctx.fillRect(px+2, py-3, 1, 1);
+  }
+}
+
 function drawIsland(){
   const ox = CX - 12, oy = CY - 7, hit = G.flash > 0;
   for(let r=0;r<ISLAND.length;r++){
@@ -342,7 +534,9 @@ function render(){
   drawSea();
   drawIsland();
   drawBeam();
+  for(const sh of G.sharks) drawShark(sh);
   for(const s of G.ships) drawShip(s);
+  for(const m of G.mermaids) drawMermaid(m);
 
   if(G.mode === 'play'){
     drawHUD();
@@ -352,9 +546,11 @@ function render(){
   if(G.mode === 'title'){
     drawTextC('WRECKERS!', 22, C.lamp, 3);
     drawTextC('KEEP THE LIGHT', 44, C.salt, 1);
-    drawTextC('WHITE SHIPS - SHOW THEM THE WAY', 158, C.salt, 1);
-    drawTextC('RED SHIPS - KEEP THEM IN THE DARK', 166, C.raider, 1);
-    if((G.t*2|0)%2) drawTextC('PRESS START', 178, C.lamp, 1);
+    drawTextC('WHITE SHIPS - SHOW THEM THE WAY', 150, C.salt, 1);
+    drawTextC('RED SHIPS - KEEP THEM IN THE DARK', 158, C.raider, 1);
+    drawTextC('SHARKS - DRIVE THEM OFF WITH LIGHT', 166, C.shark, 1);
+    drawTextC('MERMAIDS - LIGHT THEIR WAY HOME', 174, C.mermaid, 1);
+    if((G.t*2|0)%2) drawTextC('PRESS START', 184, C.lamp, 1);
   }
 
   if(G.mode === 'over'){
