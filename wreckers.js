@@ -22,7 +22,9 @@ const C = {
   shark:'#5c6b74', sharkLo:'#38424a', fin:'#1f262b',
   mermaid:'#e89cc4', mermaidLit:'#ffe1f0', tail:'#4cc0b8',
   hud:'#fcd84c', dark:'#000000', white:'#ffffff',
-  supply:'#8cf0ff', supplyLo:'#3c9cb0', lightWave:'#eaffff'
+  supply:'#8cf0ff', supplyLo:'#3c9cb0', lightWave:'#eaffff',
+  kraken:'#2c5c4c', krakenLo:'#173a2e', krakenHi:'#4c9c78', eye:'#e8fc4c',
+  aggroLo:'#54c05a', aggroMid:'#e8c832', aggroHi:'#d84c2c'
 };
 
 /* ---------- 3x5 pixel font (drawn, not typeset) ---------- */
@@ -148,7 +150,8 @@ const G = {
   score:0, best:0, lanterns:3, wave:1, cleared:0, streak:0,
   flash:0, shake:0, msg:'', msgT:0, lock:0, lureT:0, drift:0,
   sharks:[], sharkT:2.4, mermaids:[], mermaidT:6, sharkWarnT:0,
-  supply:0, supplies:[], lightWaveT:0, lightWaveR:0
+  supply:0, supplies:[], lightWaveT:0, lightWaveR:0,
+  mermaidsSaved:0, boss:null, bossIntroT:0
 };
 
 function reset(){
@@ -157,6 +160,7 @@ function reset(){
   G.flash=0; G.shake=0; G.msg='WAVE 1'; G.msgT=1.4;
   G.sharks.length=0; G.sharkT=2.4; G.mermaids.length=0; G.mermaidT=6; G.sharkWarnT=0;
   G.supply=0; G.supplies.length=0; G.lightWaveT=0; G.lightWaveR=0;
+  G.mermaidsSaved=0; G.boss=null; G.bossIntroT=0;
 }
 
 /* sharks show up once the waters get busy; mermaids once the player has proven they can juggle them */
@@ -168,6 +172,63 @@ const mermaidSpeed = () => 7 + (G.wave-MERMAID_WAVE)*0.6;
 const waveSpeed  = () => 11 + (G.wave-1)*1.5;
 const waveGap    = () => Math.max(1.05, 3.1 - (G.wave-1)*0.19);
 const raiderOdds = () => Math.min(0.52, 0.14 + (G.wave-1)*0.055);
+
+/* ---------- the boss wave: every 5th wave, a Kraken looms in from the side.
+   No ships or sharks spawn while it's up. A single aggression meter (0-100)
+   is the whole fight: dark and it creeps in, lit and it backs off. Reach 100
+   and its arm reaches the lighthouse — instant game over. Survive the clock
+   and it flees. Every mermaid saved (lifetime, capped) fights alongside you,
+   swimming out to shove its aggression down when it lands a hit. ---------- */
+const BOSS_EVERY   = 5;
+const BOSS_MAX_ALLIES = 5;
+const isBossWave  = w => w % BOSS_EVERY === 0;
+const bossCycle   = () => Math.max(1, Math.floor(G.wave / BOSS_EVERY));
+const bossAggroRate  = () => 6.5 + (bossCycle()-1)*0.9;   // %/sec, unlit
+const bossCalmRate   = () => 15 + (bossCycle()-1)*0.6;    // %/sec, lit
+const bossFightLen   = () => 42 + (bossCycle()-1)*6;      // seconds to survive
+
+function spawnBoss(){
+  const side = Math.random()<0.5 ? -1 : 1;   // -1 left, 1 right
+  const edgeX = side<0 ? -20 : W+20;
+  G.boss = {
+    side, homeX: edgeX, x: edgeX, y: CY - 20,
+    aggro: 30, timer: bossFightLen(), fleeT: 0, hitT: 0, tentT: 0,
+    lit: 0, wob: 0,
+    allies: []   // ally mermaids currently swimming out to help
+  };
+  for(const s of G.ships) s.state='out';
+  G.ships.length = 0; G.sharks.length = 0; G.mermaids.length = 0; G.supplies.length = 0;
+}
+
+// bring in up to BOSS_MAX_ALLIES mermaids (from the lifetime save count) to
+// take turns swimming out from the lighthouse and shoving the Kraken back.
+function spawnAlly(){
+  const b = G.boss; if(!b) return;
+  const cap = Math.min(BOSS_MAX_ALLIES, G.mermaidsSaved);
+  if(b.allies.length >= cap) return;
+  b.allies.push({ x: LX, y: LY, phase:'out', t:0 });
+}
+
+function bossHit(amount){
+  const b = G.boss; if(!b) return;
+  b.aggro = Math.max(0, b.aggro - amount);
+  b.hitT = 0.25;
+}
+
+function endBossWave(won){
+  const b = G.boss; if(!b) return;
+  G.boss = null;
+  if(won){
+    G.score += 1000 + (bossCycle()-1)*250;
+    sfx.wave(); tone(1568,.22,'triangle',.14,.12);
+    G.msg = 'THE KRAKEN FLEES'; G.msgT = 2.2;
+  }
+  G.wave++;
+  const healed = G.lanterns < MAX_LANTERNS;
+  if(healed) G.lanterns++;
+  G.cleared = 0;
+  if(healed) tone(1046, .18, 'triangle', .12, .18);
+}
 
 function spawn(){
   if(G.ships.length >= 6) return;
@@ -236,9 +297,16 @@ function loseLantern(msg){
 }
 
 function cleared(){
+  if(G.boss) return; // boss waves end on their own clock, not a ship count
   G.cleared++;
   if(G.cleared >= 8){
     G.cleared = 0; G.wave++;
+    if(isBossWave(G.wave)){
+      G.bossIntroT = 1.6; G.msg = 'THE KRAKEN RISES'; G.msgT = 1.6;
+      G.ships.length = 0; G.sharks.length = 0; G.mermaids.length = 0;
+      sfx.crash();
+      return;
+    }
     const healed = G.lanterns < MAX_LANTERNS;
     if(healed) G.lanterns++;
     if(G.wave === SHARK_WAVE)        { G.msg = 'SHARKS! USE THE LIGHT'; G.msgT = 2.4; }
@@ -251,11 +319,17 @@ function cleared(){
 
 // the Light Wave: a pulse from the lamp that shoves every ship off, scares
 // every shark, and reels in every mermaid at once. Costs a full supply meter.
+// During a boss fight it instead slams the Kraken's aggression down by half.
 function triggerLightWave(){
   if(G.mode !== 'play' || G.supply < SUPPLY_NEEDED || G.lightWaveT > 0) return;
   G.supply = 0;
   G.lightWaveT = 0.6; G.lightWaveR = 0;
   G.shake = .45; sfx.lightWave();
+
+  if(G.boss){
+    G.boss.aggro *= 0.5; G.boss.hitT = 0.35;
+    return;
+  }
 
   for(const s of G.ships){
     if(s.state !== 'in') continue;
@@ -268,8 +342,64 @@ function triggerLightWave(){
   for(const sh of G.sharks){ sh.scared = 2.2; sh.preyId = null; }
   for(let i=G.mermaids.length-1;i>=0;i--){
     G.mermaids.splice(i,1);
+    G.mermaidsSaved++;
     G.score += 400 + G.wave*25; cleared();
   }
+}
+
+// the Kraken fight: aggression rises while dark, falls while lit. Mermaid
+// allies swim out from the lighthouse and shove it back on contact. Reach
+// zero on the clock and it flees; reach 100 and its arm takes the lighthouse.
+const BOSS_TENT_X = () => G.boss.x + (G.boss.side<0 ? 26 : -26);
+function stepBoss(dt){
+  const b = G.boss;
+  b.wob += dt; b.timer -= dt;
+  if(b.hitT>0) b.hitT -= dt;
+
+  // it looms further in from its edge the higher its aggression climbs
+  const reach = Math.min(1, b.aggro/100);
+  b.x = b.homeX + (CX - b.homeX) * reach * 0.82;
+  b.y = CY - 20 + Math.sin(b.wob*0.7)*4;
+
+  const tx = b.x + (b.side<0 ? 14 : -14), ty = b.y + 6;
+  const lit = sdist(LX,LY,tx,ty) < BEAM_LEN && Math.abs(angDiff(sang(LX,LY,tx,ty), G.beam)) < BEAM_HALF;
+  b.lit = lit ? Math.min(1, b.lit + dt*2) : Math.max(0, b.lit - dt*1.5);
+
+  b.aggro += (lit ? -bossCalmRate() : bossAggroRate()) * dt;
+  b.aggro = Math.max(0, Math.min(100, b.aggro));
+
+  if(b.aggro >= 100){
+    G.boss = null; G.lanterns = 0; G.flash = .4; G.shake = .7;
+    G.mode = 'over'; G.lock = .9; G.best = Math.max(G.best, G.score);
+    sfx.crash(); sfx.over();
+    return;
+  }
+
+  // bring in another ally as long as there's lifetime mermaids to spare
+  b.allyT = (b.allyT ?? 0) - dt;
+  if(b.allyT <= 0){ spawnAlly(); b.allyT = 3.2; }
+
+  for(let i=b.allies.length-1;i>=0;i--){
+    const al = b.allies[i];
+    al.t += dt;
+    if(al.phase === 'out'){
+      const toB = sang(al.x, al.y, tx, ty);
+      al.a = toB;
+      al.x += Math.cos(al.a)*34*dt / PA;
+      al.y += Math.sin(al.a)*34*dt;
+      if(sdist(al.x,al.y,tx,ty) < 7){
+        bossHit(9); sfx.supply(); al.phase='back'; al.t = 0;
+      }
+    }else{
+      const toHome = sang(al.x, al.y, LX, LY);
+      al.a = toHome;
+      al.x += Math.cos(al.a)*34*dt / PA;
+      al.y += Math.sin(al.a)*34*dt;
+      if(sdist(al.x,al.y,LX,LY) < 6){ b.allies.splice(i,1); }
+    }
+  }
+
+  if(b.timer <= 0){ endBossWave(true); return; }
 }
 
 function step(dt){
@@ -286,17 +416,29 @@ function step(dt){
 
   if(G.mode!=='play') return;
 
-  G.spawnT -= dt;
-  if(G.spawnT <= 0){ spawn(); G.spawnT = waveGap() * (0.8 + Math.random()*0.5); }
+  // the boss intro holds the shoal empty and quiet for a beat before the
+  // Kraken surfaces; no ships, sharks, or mermaids spawn during it or the fight.
+  if(G.bossIntroT > 0){
+    G.bossIntroT -= dt;
+    if(G.bossIntroT <= 0){ spawnBoss(); sfx.crash(); tone(55,.6,'sawtooth',.2); }
+    return;
+  }
 
-  if(G.wave >= SHARK_WAVE){
-    G.sharkT -= dt;
-    if(G.sharkT <= 0){ spawnShark(); G.sharkT = Math.max(2.6, 6.5 - (G.wave-SHARK_WAVE)*0.4) * (0.8+Math.random()*0.4); }
+  if(!G.boss){
+    G.spawnT -= dt;
+    if(G.spawnT <= 0){ spawn(); G.spawnT = waveGap() * (0.8 + Math.random()*0.5); }
+
+    if(G.wave >= SHARK_WAVE){
+      G.sharkT -= dt;
+      if(G.sharkT <= 0){ spawnShark(); G.sharkT = Math.max(2.6, 6.5 - (G.wave-SHARK_WAVE)*0.4) * (0.8+Math.random()*0.4); }
+    }
+    if(G.wave >= MERMAID_WAVE){
+      G.mermaidT -= dt;
+      if(G.mermaidT <= 0){ spawnMermaid(); G.mermaidT = Math.max(9, 18 - (G.wave-MERMAID_WAVE)*1.2) * (0.8+Math.random()*0.4); }
+    }
   }
-  if(G.wave >= MERMAID_WAVE){
-    G.mermaidT -= dt;
-    if(G.mermaidT <= 0){ spawnMermaid(); G.mermaidT = Math.max(9, 18 - (G.wave-MERMAID_WAVE)*1.2) * (0.8+Math.random()*0.4); }
-  }
+
+  if(G.boss){ stepBoss(dt); return; }
 
   let luring = false;
 
@@ -418,6 +560,7 @@ function step(dt){
 
     if(sdist(m.x,m.y,CX,CY) < CRASH_R){
       G.mermaids.splice(i,1);
+      G.mermaidsSaved++;
       G.score += 400 + G.wave*25; sfx.mermaid(); cleared();
       continue;
     }
@@ -614,6 +757,82 @@ function drawMermaid(m){
   drawStalkMark(m, px, py);
 }
 
+// a small pixel ally, distinct from the wild mermaids: she swims out from the
+// lighthouse to shove the Kraken back, then heads home for another lap.
+function drawAlly(al){
+  const px = Math.round(al.x), py = Math.round(al.y);
+  ctx.fillStyle = C.wave;
+  ctx.fillRect(px - Math.round(Math.cos(al.a)*2), py - Math.round(Math.sin(al.a)*2), 1, 1);
+  ctx.fillStyle = C.tail;
+  ctx.fillRect(px + (Math.cos(al.a)>0?-3:2), py, 2, 1);
+  ctx.fillStyle = C.mermaidLit;
+  ctx.fillRect(px-1, py-1, 3, 2);
+  ctx.fillRect(px + (Math.cos(al.a)>0?1:-1), py-2, 1, 1);
+}
+
+// the Kraken: a big, looming pixel body docked at one edge, tentacles reaching
+// further in as its aggression climbs. Flashes white when hit by a mermaid
+// push or the Light Wave; darkens and calms while caught in the beam.
+function drawKraken(b){
+  const px = Math.round(b.x), py = Math.round(b.y);
+  const faceR = b.side < 0;
+  const hit = b.hitT > 0;
+  const bob = Math.sin(b.wob*1.4)*2;
+  const bodyCol = hit ? C.white : (b.lit>0.3 ? C.krakenHi : C.kraken);
+  const loCol   = hit ? C.salt  : C.krakenLo;
+
+  // reaching tentacle — grows toward the lighthouse with aggression
+  const reach = Math.min(1, b.aggro/100);
+  const tlen = 10 + reach*30;
+  const tx = px + (faceR? 1:-1)*tlen, ty = py + 8 + bob*0.4;
+  ctx.fillStyle = loCol;
+  for(let i=0;i<tlen;i+=2){
+    const yy = py + 8 + Math.sin(i*0.5 + b.wob*3)*2;
+    ctx.fillRect(px + (faceR?1:-1)*i, Math.round(yy), 2, 2);
+  }
+  ctx.fillStyle = bodyCol;
+  ctx.fillRect(Math.round(tx)-1, Math.round(ty)-1, 3, 3); // tentacle tip / suckers
+
+  // head + mantle, big and looming off the edge
+  ctx.fillStyle = loCol;
+  ctx.fillRect(px-9, py-10+bob, 18, 22);
+  ctx.fillStyle = bodyCol;
+  ctx.fillRect(px-8, py-9+bob, 16, 18);
+  ctx.fillRect(px-6, py-13+bob, 12, 5);      // domed head
+
+  // a fan of shorter fringe tentacles under the mantle
+  ctx.fillStyle = loCol;
+  for(let i=-2;i<=2;i++){
+    const sway = Math.sin(b.wob*2 + i)*2;
+    ctx.fillRect(px-7+ (i+2)*3, Math.round(py+9+bob+sway), 3, 6);
+  }
+
+  // eyes — glare toward the lighthouse
+  ctx.fillStyle = C.eye;
+  ctx.fillRect(px + (faceR? -3: 0), py-6+bob, 2, 2);
+  ctx.fillRect(px + (faceR?  1:-3), py-6+bob, 2, 2);
+  if(b.lit > 0.3){
+    ctx.fillStyle = C.dark;
+    ctx.fillRect(px + (faceR? -3: 0), py-6+bob, 1, 1);
+    ctx.fillRect(px + (faceR?  1:-3), py-6+bob, 1, 1);
+  }
+}
+
+// the boss HUD: a big aggression bar across the top, filling toward red —
+// a full bar means its arm is about to reach the lighthouse.
+function drawBossHUD(b){
+  const x0 = 20, y0 = 22, bw = W-40, bh = 6;
+  drawTextC('KRAKEN AGGRESSION', y0-7, C.salt, 1);
+  ctx.fillStyle = C.rockLo; ctx.fillRect(x0-1, y0-1, bw+2, bh+2);
+  ctx.fillStyle = C.dark;   ctx.fillRect(x0, y0, bw, bh);
+  const pct = b.aggro/100;
+  const col = pct < 0.5 ? C.aggroLo : pct < 0.8 ? C.aggroMid : C.aggroHi;
+  ctx.fillStyle = col;
+  ctx.fillRect(x0, y0, Math.round(bw*pct), bh);
+  const secs = Math.max(0, Math.ceil(b.timer));
+  drawTextC('HOLD '+secs, H-14, C.hud, 1);
+}
+
 function drawIsland(){
   const ox = CX - 12, oy = CY - 7, hit = G.flash > 0;
   for(let r=0;r<ISLAND.length;r++){
@@ -675,16 +894,19 @@ function render(){
     ctx.translate(Math.round((Math.random()-.5)*3), Math.round((Math.random()-.5)*3));
   }
   drawSea();
+  if(G.boss) drawKraken(G.boss);
   drawIsland();
   drawBeam();
   for(const sh of G.sharks) drawShark(sh);
   for(const s of G.ships) drawShip(s);
   for(const sp of G.supplies) drawSupply(sp);
   for(const m of G.mermaids) drawMermaid(m);
+  if(G.boss) for(const al of G.boss.allies) drawAlly(al);
   drawLightWaveRing();
 
   if(G.mode === 'play'){
     drawHUD();
+    if(G.boss) drawBossHUD(G.boss);
     if(G.msgT > 0 && (G.t*6|0)%2) drawTextC(G.msg, 150, C.lamp, 2);
   }
 
@@ -693,9 +915,10 @@ function render(){
     drawTextC('KEEP THE LIGHT', 44, C.salt, 1);
     drawTextC('WHITE SHIPS - SHOW THEM THE WAY', 150, C.salt, 1);
     drawTextC('RED SHIPS - KEEP THEM IN THE DARK', 158, C.raider, 1);
-    drawTextC('SHARKS - DRIVE THEM OFF WITH LIGHT', 166, C.shark, 1);
-    drawTextC('MERMAIDS - LIGHT THEIR WAY HOME', 174, C.mermaid, 1);
-    if((G.t*2|0)%2) drawTextC('PRESS START', 184, C.lamp, 1);
+    drawTextC('SHARKS - DRIVE THEM OFF WITH LIGHT', 163, C.shark, 1);
+    drawTextC('MERMAIDS - LIGHT THEIR WAY HOME', 170, C.mermaid, 1);
+    drawTextC('WAVE 5 - HOLD THE LIGHT ON THE KRAKEN', 177, C.krakenHi, 1);
+    if((G.t*2|0)%2) drawTextC('PRESS START', 186, C.lamp, 1);
   }
 
   if(G.mode === 'over'){

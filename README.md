@@ -16,6 +16,7 @@ You are the keeper of the last light on the shoal. Hold the beam on ships to dec
 - A shark that kills a raider — and, sometimes, a trader you've just saved — leaves behind a **supply point**. Catch it in the beam and it's drawn in like a tractor beam, filling one of 4 slots.
 - Fill all 4 slots and press the middle button to unleash the **Light Wave**: a pulse from the lighthouse that shoves every ship off the shoal, scares off every shark, and pulls in every mermaid at once.
 - Clear a wave with a lantern missing and you get one back.
+- Every **5th wave** is a **Kraken** boss fight: it looms in from the side, and its aggression climbs while the beam is off it — let it go dark too long and its arm reaches the lighthouse for an instant game over. Keep the beam on it to hold it back. No ships or sharks spawn during the fight. Every mermaid you've saved (lifetime, up to 5) swims out to shove its aggression down, and the Light Wave halves it outright. Survive the clock and it flees.
 
 ## Controls
 
@@ -52,7 +53,8 @@ Everything lives in `wreckers.js` with no external libraries:
 - **Text** — rendered from a hand-authored 3×5 bitmap font baked into the `FONT` table, not a system font.
 - **The beam** — a wedge computed from the lamp's position and the current heading, filled with a dithered checkerboard pattern instead of alpha blending, in the spirit of TIA-era "transparency."
 - **Simulation** — a single `step(dt)` function advances ships, sharks, mermaids, and supply points each frame: traders turn for open water once lit, raiders steer toward the light, sharks hunt the nearest ship/mermaid and flee once caught in the beam, mermaids stall in the dark and bolt for the lighthouse once lit, and supply points drift until lit, then get reeled toward the lamp.
-- **The Light Wave** — `triggerLightWave()` fires once the 4-slot supply meter is full: every ship is flipped to its "fleeing" state, every shark is scared off, and every mermaid is banked, all at once, for the cost of the whole meter.
+- **The Light Wave** — `triggerLightWave()` fires once the 4-slot supply meter is full: every ship is flipped to its "fleeing" state, every shark is scared off, and every mermaid is banked, all at once, for the cost of the whole meter. During a boss fight it instead halves the Kraken's aggression.
+- **The Kraken** — every 5th wave, `spawnBoss()`/`stepBoss()` take over `step()`: normal ship/shark/mermaid spawning pauses, and a single aggression value (0-100) drives the fight — it climbs while the beam is off the Kraken, falls while lit, and hitting 100 is an instant game over. Lifetime-saved mermaids (capped at 5) spawn as allies that swim out and shove aggression down on contact. Survive a wave-scaled timer and the Kraken flees.
 - **Audio** — small bleeps and noise bursts synthesized live via the Web Audio API (`OscillatorNode`/`GainNode`), one voice at a time, rather than sample playback.
 - **Layout** — the game "cabinet" is a responsive flex layout that adapts between portrait (buttons below the screen) and short/landscape viewports (buttons beside the screen, instructions hidden) so the whole game fits on one screen without scrolling.
 
