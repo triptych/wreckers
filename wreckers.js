@@ -271,7 +271,7 @@ function spawnMermaid(){
   else { x = W+8; y = 20 + Math.random()*(H-30); }
   G.mermaids.push({
     id: ++idSeq, x, y, a: sang(x,y,CX,CY), lit:0, spd: mermaidSpeed(),
-    wob: Math.random()*6, safeT:0
+    wob: Math.random()*6, safeT:0, wasInRange:false
   });
 }
 
@@ -279,6 +279,14 @@ function spawnMermaid(){
 // like a tractor beam and fills one slot of the Light Wave.
 function spawnSupply(x, y){
   if(G.supply >= SUPPLY_NEEDED) return;
+  // pull the spawn point in to just inside the beam's reach so it can
+  // never appear stranded beyond the lighthouse's range, unreachable forever.
+  const d = sdist(LX,LY,x,y);
+  const maxD = BEAM_LEN - 6;
+  if(d > maxD){
+    const a = sang(LX,LY,x,y);
+    x = LX + Math.cos(a)*maxD / PA; y = LY + Math.sin(a)*maxD;
+  }
   G.supplies.push({ x, y, a: Math.random()*Math.PI*2, drift: 4 + Math.random()*3 });
 }
 
@@ -468,6 +476,9 @@ function step(dt){
           s.state='out'; s.a = toRock + Math.PI + (Math.random()-.5)*0.7; s.ft = .5;
           G.streak++; G.score += 100 + Math.min(150, (G.streak-1)*25);
           sfx.save(); cleared();
+          // cleared() may have just wiped G.ships to start a boss wave —
+          // bail out of this loop immediately rather than read past its new end.
+          if(G.bossIntroT > 0) break;
           // a grateful trader sometimes tosses back a supply as it sails off
           if(Math.random() < 0.35) spawnSupply(s.x, s.y);
         }
@@ -485,6 +496,8 @@ function step(dt){
           if(s.patience <= 0){
             s.state='out'; s.a = toRock + Math.PI + (Math.random()-.5)*0.9;
             G.score += 50; sfx.flee(); cleared();
+            // same as above: a boss-wave transition truncates G.ships mid-loop.
+            if(G.bossIntroT > 0) break;
           }
         }
       }
@@ -543,10 +556,15 @@ function step(dt){
     }
 
     if(m.safeT > 0) m.safeT -= dt;
+    // the instant she drifts into the lighthouse's reach, give the player a
+    // beat to notice and react before a lurking shark can snatch her on the spot.
+    const inRange = sdist(LX,LY,m.x,m.y) < BEAM_LEN;
+    if(inRange && !m.wasInRange) m.safeT = Math.max(m.safeT, 0.5);
+    m.wasInRange = inRange;
     let taken = false;
     // a mermaid can only be snatched where the light could actually have reached her —
     // otherwise the player never had a chance to save her.
-    if(m.lit < 0.3 && m.safeT <= 0 && sdist(LX,LY,m.x,m.y) < BEAM_LEN){
+    if(m.lit < 0.3 && m.safeT <= 0 && inRange){
       for(const sh of G.sharks){
         if(sdist(m.x,m.y,sh.x,sh.y) < 9){ taken = true; break; }
       }
@@ -614,7 +632,10 @@ function step(dt){
 
     // a shark can only make its kill within the lamp's reach — outside BEAM_LEN
     // the player never had a shot at driving it off, so let it keep closing instead.
-    if(prey && sdist(sh.x,sh.y,prey.x,prey.y) < 6 && sdist(LX,LY,prey.x,prey.y) < BEAM_LEN){
+    // a ship that has already turned to flee this frame is safe — the kill can't
+    // land on a ship that's no longer inbound, even if the shark was already adjacent.
+    const preyEscaped = prey && G.ships.includes(prey) && prey.state !== 'in';
+    if(prey && !preyEscaped && sdist(sh.x,sh.y,prey.x,prey.y) < 6 && sdist(LX,LY,prey.x,prey.y) < BEAM_LEN){
       const isMermaid = G.mermaids.includes(prey);
       if(isMermaid){
         G.mermaids.splice(G.mermaids.indexOf(prey),1);
