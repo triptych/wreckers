@@ -187,6 +187,13 @@ const bossAggroRate  = () => 6.5 + (bossCycle()-1)*0.9;   // %/sec, unlit
 const bossCalmRate   = () => 15 + (bossCycle()-1)*0.6;    // %/sec, lit
 const bossFightLen   = () => 42 + (bossCycle()-1)*6;      // seconds to survive
 
+// kamikaze sharks: they don't hunt ships, they ram the lighthouse itself.
+// Chasing one off means pulling the beam off the Kraken, so its aggression
+// keeps climbing while you defend — the fight can't be won by parking the
+// beam on the Kraken and ignoring everything else.
+const bossJawGap   = () => Math.max(3.2, 7.5 - (bossCycle()-1)*0.6);   // sec between spawns
+const bossJawSpeed = () => 24 + (bossCycle()-1)*2.5;
+
 function spawnBoss(){
   const side = Math.random()<0.5 ? -1 : 1;   // -1 left, 1 right
   const edgeX = side<0 ? -20 : W+20;
@@ -194,7 +201,8 @@ function spawnBoss(){
     side, homeX: edgeX, x: edgeX, y: CY - 20,
     aggro: 30, timer: bossFightLen(), fleeT: 0, hitT: 0, tentT: 0,
     lit: 0, wob: 0,
-    allies: []   // ally mermaids currently swimming out to help
+    allies: [],  // ally mermaids currently swimming out to help
+    jaws: [], jawT: bossJawGap()   // kamikaze sharks gunning for the lighthouse
   };
   for(const s of G.ships) s.state='out';
   G.ships.length = 0; G.sharks.length = 0; G.mermaids.length = 0; G.supplies.length = 0;
@@ -213,6 +221,21 @@ function bossHit(amount){
   const b = G.boss; if(!b) return;
   b.aggro = Math.max(0, b.aggro - amount);
   b.hitT = 0.25;
+}
+
+// a kamikaze shark: spawns at the edge and beelines straight for the
+// lighthouse, ignoring ships and mermaids entirely (there are none during
+// the fight). Catch it in the beam to drive it off; let it land and it
+// rams the light, spiking the Kraken's aggression as the lamp reels.
+function spawnJawShark(){
+  const edge = (Math.random()*4)|0;
+  let x,y;
+  if(edge===0){ x = Math.random()*W; y = -10; }
+  else if(edge===1){ x = Math.random()*W; y = H+10; }
+  else if(edge===2){ x = -10; y = 20 + Math.random()*(H-30); }
+  else { x = W+10; y = 20 + Math.random()*(H-30); }
+  G.boss.jaws.push({ x, y, a: sang(x,y,LX,LY), lit:0, spd: bossJawSpeed(), scared:0 });
+  sfx.sharkNear();
 }
 
 function endBossWave(won){
@@ -364,8 +387,12 @@ function stepBoss(dt){
   b.wob += dt; b.timer -= dt;
   if(b.hitT>0) b.hitT -= dt;
 
-  // it looms further in from its edge the higher its aggression climbs
-  const reach = Math.min(1, b.aggro/100);
+  // it looms further in from its edge the higher its aggression climbs.
+  // reach is floored so it never drags itself out past the beam's own
+  // range — otherwise driving its aggression down also drags it out of
+  // reach, and it just drifts back and forth at the edge of BEAM_LEN
+  // instead of the fight ever resolving.
+  const reach = Math.max(0.32, Math.min(1, b.aggro/100));
   b.x = b.homeX + (CX - b.homeX) * reach * 0.82;
   b.y = CY - 20 + Math.sin(b.wob*0.7)*4;
 
@@ -404,6 +431,43 @@ function stepBoss(dt){
       al.x += Math.cos(al.a)*34*dt / PA;
       al.y += Math.sin(al.a)*34*dt;
       if(sdist(al.x,al.y,LX,LY) < 6){ b.allies.splice(i,1); }
+    }
+  }
+
+  // kamikaze sharks: they ignore the Kraken and go straight for the
+  // lighthouse. Holding the beam on the Kraken forever means letting every
+  // one of these through — the player has to break off and light them up,
+  // which costs Kraken calming time and forces the fight to keep moving.
+  b.jawT -= dt;
+  if(b.jawT <= 0){ spawnJawShark(); b.jawT = bossJawGap() * (0.85 + Math.random()*0.3); }
+
+  for(let i=b.jaws.length-1;i>=0;i--){
+    const j = b.jaws[i];
+    const lit = litBy(j);
+    j.lit = lit ? Math.min(1, j.lit + dt*2.4) : Math.max(0, j.lit - dt*1.2);
+    if(j.lit >= 0.6 && j.scared <= 0){ j.scared = 1.6; sfx.sharkAway(); }
+
+    if(j.scared > 0){
+      j.scared -= dt;
+      const away = sang(LX,LY,j.x,j.y);
+      j.a = turnToward(j.a, away, dt*3);
+      const spd = j.spd * 1.6;
+      j.x += Math.cos(j.a)*spd*dt / PA;
+      j.y += Math.sin(j.a)*spd*dt;
+      if(j.x < -16 || j.x > W+16 || j.y < -16 || j.y > H+16) b.jaws.splice(i,1);
+      continue;
+    }
+
+    j.a = turnToward(j.a, sang(j.x,j.y,LX,LY), dt*2.4);
+    j.x += Math.cos(j.a)*j.spd*dt / PA;
+    j.y += Math.sin(j.a)*j.spd*dt;
+
+    if(sdist(j.x,j.y,LX,LY) < 8){
+      b.jaws.splice(i,1);
+      b.aggro = Math.min(100, b.aggro + 14);
+      G.flash = .3; G.shake = .5; sfx.bite();
+      G.msg = 'SHARK HIT THE LIGHT'; G.msgT = 1.1;
+      continue;
     }
   }
 
@@ -751,6 +815,28 @@ function drawShark(sh){
   }
 }
 
+// a kamikaze shark: red-finned and faster-looking than the regular hunters,
+// so it reads as a threat to the lighthouse rather than to a ship.
+function drawJawShark(j){
+  const px = Math.round(j.x), py = Math.round(j.y);
+  const facingR = Math.cos(j.a) > 0;
+  const lit = j.lit > 0.25;
+  ctx.fillStyle = C.wave;
+  ctx.fillRect(px - Math.round(Math.cos(j.a)*4), py - Math.round(Math.sin(j.a)*4), 1, 1);
+  ctx.fillRect(px - Math.round(Math.cos(j.a)*2), py - Math.round(Math.sin(j.a)*2), 1, 1);
+  ctx.fillStyle = lit ? '#8a99a2' : C.raiderLo;
+  ctx.fillRect(px-3, py, 6, 1);                          // body
+  ctx.fillStyle = lit ? C.sharkLo : C.raider;
+  ctx.fillRect(px-3, py+1, 6, 1);                        // belly
+  ctx.fillStyle = lit ? C.fin : C.raider;
+  ctx.fillRect(px, py-2, 1, 2);                          // dorsal fin
+  ctx.fillStyle = lit ? '#8a99a2' : C.raiderLo;
+  ctx.fillRect(px + (facingR? 3:-4), py, 1, 1);          // nose
+  if(j.scared > 0 && (G.t*16|0)%2){
+    ctx.fillStyle = C.white; ctx.fillRect(px-1, py-4, 1,1); ctx.fillRect(px+1, py-4, 1,1);
+  }
+}
+
 function drawSupply(sp){
   const px = Math.round(sp.x), py = Math.round(sp.y);
   const pulse = (G.t*6|0)%2;
@@ -923,6 +1009,7 @@ function render(){
   for(const sp of G.supplies) drawSupply(sp);
   for(const m of G.mermaids) drawMermaid(m);
   if(G.boss) for(const al of G.boss.allies) drawAlly(al);
+  if(G.boss) for(const j of G.boss.jaws) drawJawShark(j);
   drawLightWaveRing();
 
   if(G.mode === 'play'){
@@ -938,7 +1025,7 @@ function render(){
     drawTextC('RED SHIPS - KEEP THEM IN THE DARK', 158, C.raider, 1);
     drawTextC('SHARKS - DRIVE THEM OFF WITH LIGHT', 163, C.shark, 1);
     drawTextC('MERMAIDS - LIGHT THEIR WAY HOME', 170, C.mermaid, 1);
-    drawTextC('WAVE 5 - HOLD THE LIGHT ON THE KRAKEN', 177, C.krakenHi, 1);
+    drawTextC('WAVE 5 - HOLD THE LIGHT, DODGE SHARKS', 177, C.krakenHi, 1);
     if((G.t*2|0)%2) drawTextC('PRESS START', 186, C.lamp, 1);
   }
 
